@@ -1,8 +1,9 @@
 package com.blog.backend.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.blog.backend.common.SecurityUtils;
+import com.blog.backend.common.ClientIpUtils;
 import com.blog.backend.common.Result;
+import com.blog.backend.common.SecurityUtils;
 import com.blog.backend.dto.CommentAuditDTO;
 import com.blog.backend.dto.CommentQueryDTO;
 import com.blog.backend.dto.CommentSubmitDTO;
@@ -14,7 +15,13 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
@@ -41,8 +48,7 @@ public class CommentController {
     @Operation(summary = "提交评论")
     @PostMapping
     public Result<Void> submit(@Valid @RequestBody CommentSubmitDTO comment, HttpServletRequest request) {
-        // IP 和 UA 只进入风控字段，不直接暴露在前台评论数据中。
-        commentService.submitComment(comment, request.getRemoteAddr(), request.getHeader("User-Agent"), SecurityUtils.currentUsername());
+        commentService.submitComment(comment, ClientIpUtils.getClientIp(request), request.getHeader("User-Agent"), SecurityUtils.currentUsername());
         return Result.success();
     }
 

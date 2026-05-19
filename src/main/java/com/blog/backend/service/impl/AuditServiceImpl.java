@@ -1,11 +1,14 @@
 package com.blog.backend.service.impl;
 
+import com.blog.backend.common.ClientIpUtils;
 import com.blog.backend.common.SecurityUtils;
 import com.blog.backend.entity.OperationAuditLog;
 import com.blog.backend.entity.User;
 import com.blog.backend.mapper.OperationAuditLogMapper;
 import com.blog.backend.service.AuditService;
 import com.blog.backend.service.UserService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,6 +17,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -21,6 +25,7 @@ import java.time.LocalDateTime;
 public class AuditServiceImpl implements AuditService {
     private final OperationAuditLogMapper operationAuditLogMapper;
     private final UserService userService;
+    private final ObjectMapper objectMapper;
 
     @Override
     public void record(String action, String targetType, Long targetId, String detail, boolean success, String errorMessage) {
@@ -29,7 +34,6 @@ public class AuditServiceImpl implements AuditService {
             User user = username == null ? null : userService.getByUsername(username);
             HttpServletRequest request = currentRequest();
 
-            // 审计日志尽量自包含，后续排查误操作时不依赖业务表的当前状态。
             OperationAuditLog auditLog = new OperationAuditLog();
             auditLog.setOperatorId(user == null ? null : user.getId());
             auditLog.setOperatorUsername(username);
@@ -43,7 +47,7 @@ public class AuditServiceImpl implements AuditService {
             if (request != null) {
                 auditLog.setRequestMethod(request.getMethod());
                 auditLog.setRequestPath(request.getRequestURI());
-                auditLog.setRequestIp(request.getRemoteAddr());
+                auditLog.setRequestIp(ClientIpUtils.getClientIp(request));
                 auditLog.setUserAgent(request.getHeader("User-Agent"));
             }
             operationAuditLogMapper.insert(auditLog);
@@ -53,21 +57,16 @@ public class AuditServiceImpl implements AuditService {
     }
 
     private HttpServletRequest currentRequest() {
-        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes) {
-            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             return attributes.getRequest();
         }
         return null;
     }
 
-    private String toJsonDetail(String detail) {
+    private String toJsonDetail(String detail) throws JsonProcessingException {
         if (detail == null || detail.isBlank()) {
             return null;
         }
-        return "{\"message\":\"" + detail
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\r", "\\r")
-                .replace("\n", "\\n") + "\"}";
+        return objectMapper.writeValueAsString(Map.of("message", detail));
     }
 }

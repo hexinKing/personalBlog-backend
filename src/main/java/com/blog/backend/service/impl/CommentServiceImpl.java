@@ -3,6 +3,9 @@ package com.blog.backend.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.blog.backend.common.ArticleStatus;
+import com.blog.backend.common.BusinessException;
+import com.blog.backend.common.CommentStatus;
 import com.blog.backend.common.CryptoUtils;
 import com.blog.backend.dto.CommentAuditDTO;
 import com.blog.backend.dto.CommentQueryDTO;
@@ -27,7 +30,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -40,7 +42,7 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
     public List<Comment> listCommentsByArticleId(Long articleId) {
         return baseMapper.selectList(new LambdaQueryWrapper<Comment>()
                 .eq(Comment::getArticleId, articleId)
-                .eq(Comment::getStatus, 1) // 只显示审核通过的
+                .eq(Comment::getStatus, CommentStatus.APPROVED)
                 .orderByDesc(Comment::getCreateTime));
     }
 
@@ -48,7 +50,7 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
     public List<CommentVO> listCommentTreeByArticleId(Long articleId) {
         List<Comment> comments = baseMapper.selectList(new LambdaQueryWrapper<Comment>()
                 .eq(Comment::getArticleId, articleId)
-                .eq(Comment::getStatus, 1)
+                .eq(Comment::getStatus, CommentStatus.APPROVED)
                 .orderByAsc(Comment::getCreateTime));
         return buildTree(comments);
     }
@@ -80,24 +82,24 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
     @Transactional
     public void submitComment(CommentSubmitDTO dto, String ip, String userAgent, String username) {
         Article article = articleMapper.selectById(dto.getArticleId());
-        if (article == null || !Integer.valueOf(1).equals(article.getStatus())) {
-            throw new RuntimeException("文章不存在或未发布");
+        if (article == null || !Integer.valueOf(ArticleStatus.PUBLISHED).equals(article.getStatus())) {
+            throw new BusinessException(404, "文章不存在或未发布");
         }
         if (Integer.valueOf(0).equals(article.getAllowComment())) {
-            throw new RuntimeException("该文章已关闭评论");
+            throw new BusinessException("该文章已关闭评论");
         }
 
         Comment parent = null;
         if (dto.getParentId() != null) {
             parent = getById(dto.getParentId());
             if (parent == null || !dto.getArticleId().equals(parent.getArticleId())) {
-                throw new RuntimeException("父评论不存在");
+                throw new BusinessException(404, "父评论不存在");
             }
         }
 
         User user = username == null ? null : userService.getByUsername(username);
         Comment comment = new Comment();
-        BeanUtils.copyProperties(dto, comment);
+        applyCommentFields(dto, comment);
         comment.setUserId(user == null ? null : user.getId());
         comment.setRootId(parent == null ? null : (parent.getRootId() == null ? parent.getId() : parent.getRootId()));
         comment.setStatus(resolveInitialStatus(dto.getContent()));
@@ -109,10 +111,8 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
         comment.setDeleted(0);
         save(comment);
 
-        // 审核通过才计入文章评论数，避免后台待审核评论污染前台统计。
-        if (Integer.valueOf(1).equals(comment.getStatus())) {
-            article.setCommentCount((article.getCommentCount() == null ? 0 : article.getCommentCount()) + 1);
-            articleMapper.updateById(article);
+        if (Integer.valueOf(CommentStatus.APPROVED).equals(comment.getStatus())) {
+            adjustCommentCount(article, 1);
         }
     }
 
@@ -121,7 +121,7 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
     public void auditComment(Long id, CommentAuditDTO dto, String auditorUsername) {
         Comment comment = getById(id);
         if (comment == null) {
-            throw new RuntimeException("评论不存在");
+            throw new BusinessException(404, "评论不存在");
         }
         User auditor = auditorUsername == null ? null : userService.getByUsername(auditorUsername);
         Integer oldStatus = comment.getStatus();
@@ -132,13 +132,34 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
         comment.setUpdateTime(LocalDateTime.now());
         updateById(comment);
 
-        if (!Integer.valueOf(1).equals(oldStatus) && Integer.valueOf(1).equals(dto.getStatus())) {
+        if (!statusEquals(oldStatus, CommentStatus.APPROVED) && statusEquals(dto.getStatus(), CommentStatus.APPROVED)) {
             Article article = articleMapper.selectById(comment.getArticleId());
-            if (article != null) {
-                article.setCommentCount((article.getCommentCount() == null ? 0 : article.getCommentCount()) + 1);
-                articleMapper.updateById(article);
-            }
+            adjustCommentCount(article, 1);
+        } else if (statusEquals(oldStatus, CommentStatus.APPROVED) && !statusEquals(dto.getStatus(), CommentStatus.APPROVED)) {
+            Article article = articleMapper.selectById(comment.getArticleId());
+            adjustCommentCount(article, -1);
         }
+    }
+
+    private void applyCommentFields(CommentSubmitDTO dto, Comment comment) {
+        comment.setArticleId(dto.getArticleId());
+        comment.setParentId(dto.getParentId());
+        comment.setNickname(dto.getNickname());
+        comment.setEmail(dto.getEmail());
+        comment.setContent(dto.getContent());
+    }
+
+    private void adjustCommentCount(Article article, int delta) {
+        if (article == null) {
+            return;
+        }
+        int current = article.getCommentCount() == null ? 0 : article.getCommentCount();
+        article.setCommentCount(Math.max(0, current + delta));
+        articleMapper.updateById(article);
+    }
+
+    private boolean statusEquals(Integer actual, int expected) {
+        return Integer.valueOf(expected).equals(actual);
     }
 
     private List<CommentVO> buildTree(List<Comment> comments) {
@@ -149,7 +170,6 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
             map.put(comment.getId(), vo);
         }
 
-        // 使用内存组树，前台拿到的数据就能直接渲染评论和回复层级。
         List<CommentVO> roots = new ArrayList<>();
         for (CommentVO vo : map.values()) {
             if (vo.getParentId() == null || !map.containsKey(vo.getParentId())) {
@@ -165,15 +185,12 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
         List<SensitiveWord> words = sensitiveWordMapper.selectList(new LambdaQueryWrapper<SensitiveWord>()
                 .eq(SensitiveWord::getStatus, 1));
         if (words == null || words.isEmpty()) {
-            // 默认仍进入审核，保持原系统“先审后发”的内容安全策略。
-            return 0;
+            return CommentStatus.PENDING;
         }
-        List<SensitiveWord> matched = words.stream()
+        boolean reject = words.stream()
+                .filter(word -> word.getWord() != null && !word.getWord().isBlank())
                 .filter(word -> content != null && content.contains(word.getWord()))
-                .collect(Collectors.toList());
-        if (matched.stream().anyMatch(word -> Integer.valueOf(2).equals(word.getLevel()))) {
-            return 2;
-        }
-        return 0;
+                .anyMatch(word -> Integer.valueOf(2).equals(word.getLevel()));
+        return reject ? CommentStatus.REJECTED : CommentStatus.PENDING;
     }
 }

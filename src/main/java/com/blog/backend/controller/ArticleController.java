@@ -1,8 +1,9 @@
 package com.blog.backend.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.blog.backend.common.SecurityUtils;
+import com.blog.backend.common.ClientIpUtils;
 import com.blog.backend.common.Result;
+import com.blog.backend.common.SecurityUtils;
 import com.blog.backend.dto.ArticleQueryDTO;
 import com.blog.backend.dto.ArticleSaveDTO;
 import com.blog.backend.entity.Article;
@@ -13,7 +14,13 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
@@ -40,14 +47,12 @@ public class ArticleController {
     @Operation(summary = "文章详情")
     @GetMapping("/{id}")
     public Result<ArticleVO> getDetail(@PathVariable Long id, HttpServletRequest request) {
-        String ip = request.getRemoteAddr();
-        return Result.success(articleService.getArticleDetail(id, ip));
+        return Result.success(articleService.getArticleDetail(id, ClientIpUtils.getClientIp(request)));
     }
 
     @Operation(summary = "发布文章")
     @PostMapping
     public Result<Long> save(@Valid @RequestBody ArticleSaveDTO article) {
-        // 新建和更新统一入口，标签同步、版本历史和缓存失效由服务层事务处理。
         return Result.success(articleService.saveArticle(article, SecurityUtils.currentUsername()));
     }
 

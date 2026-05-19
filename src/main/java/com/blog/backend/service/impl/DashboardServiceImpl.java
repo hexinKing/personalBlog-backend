@@ -1,6 +1,9 @@
 package com.blog.backend.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.blog.backend.common.ArticleStatus;
+import com.blog.backend.common.CommentStatus;
 import com.blog.backend.entity.Article;
 import com.blog.backend.entity.Category;
 import com.blog.backend.entity.Comment;
@@ -28,19 +31,22 @@ public class DashboardServiceImpl implements DashboardService {
     public DashboardVO getOverview() {
         DashboardVO vo = new DashboardVO();
         vo.setTotalArticles(articleMapper.selectCount(new LambdaQueryWrapper<Article>()));
-        vo.setPublishedArticles(articleMapper.selectCount(new LambdaQueryWrapper<Article>().eq(Article::getStatus, 1)));
-        vo.setDraftArticles(articleMapper.selectCount(new LambdaQueryWrapper<Article>().eq(Article::getStatus, 0)));
+        vo.setPublishedArticles(articleMapper.selectCount(new LambdaQueryWrapper<Article>().eq(Article::getStatus, ArticleStatus.PUBLISHED)));
+        vo.setDraftArticles(articleMapper.selectCount(new LambdaQueryWrapper<Article>().eq(Article::getStatus, ArticleStatus.DRAFT)));
         vo.setTotalComments(commentMapper.selectCount(new LambdaQueryWrapper<Comment>()));
-        vo.setPendingComments(commentMapper.selectCount(new LambdaQueryWrapper<Comment>().eq(Comment::getStatus, 0)));
+        vo.setPendingComments(commentMapper.selectCount(new LambdaQueryWrapper<Comment>().eq(Comment::getStatus, CommentStatus.PENDING)));
         vo.setCategoryCount(categoryMapper.selectCount(new LambdaQueryWrapper<Category>()));
         vo.setTagCount(tagMapper.selectCount(new LambdaQueryWrapper<Tag>()));
         vo.setHotArticles(articleService.listHotArticles());
-
-        Long totalViews = articleMapper.selectList(new LambdaQueryWrapper<Article>().select(Article::getViewCount))
-                .stream()
-                .mapToLong(article -> article.getViewCount() == null ? 0L : article.getViewCount())
-                .sum();
-        vo.setTotalViews(totalViews);
+        vo.setTotalViews(sumTotalViews());
         return vo;
+    }
+
+    private Long sumTotalViews() {
+        return articleMapper.selectObjs(new QueryWrapper<Article>().select("COALESCE(SUM(view_count), 0)"))
+                .stream()
+                .findFirst()
+                .map(value -> ((Number) value).longValue())
+                .orElse(0L);
     }
 }
